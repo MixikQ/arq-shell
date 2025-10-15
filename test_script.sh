@@ -1,6 +1,10 @@
 #!/bin/bash
 
-first_script="./arq.sh"
+arq="./arq.sh"
+if [ ! -f $arq ]; then
+    echo "Please put "arq.sh" in same directory with the test"
+    exit 1
+fi
 total_tests=0
 passed_tests=0
 failed_tests=0
@@ -60,7 +64,7 @@ run_test() {
     create_virtual_disk "$disk_name" "$disk_size"
     fill_disk_with_files "$initial_fill"
     if [ $custom_arq_path -eq 0 ]; then
-        if "$first_script" --fill-limit "$fill_limit" --free-upto "$free_upto" "$PWD/test_disk" 2>/dev/null; then
+        if "$arq" --fill-limit "$fill_limit" --free-upto "$free_upto" "$PWD/test_disk" 2>/dev/null; then
             local size=$(df "$PWD/test_disk" --output=size | awk "NR==2")
             local lost_found_size=$(du -s -B1 "$PWD/test_disk/lost+found" | awk '{print $1}')
             local final_avail=$(df "$PWD/test_disk" --output=avail | awk "NR==2")
@@ -85,7 +89,7 @@ run_test() {
         echo ""
     else
         mkdir -p /tmp/custom_backup_test
-        if "$first_script" --fill-limit "$fill_limit" --free-upto "$free_upto" --arq-path "/tmp/custom_backup_test" "$PWD/test_disk" 2>/dev/null; then
+        if "$arq" --fill-limit "$fill_limit" --free-upto "$free_upto" --arq-path "/tmp/custom_backup_test" "$PWD/test_disk" 2>/dev/null; then
             local size=$(df "$PWD/test_disk" --output=size | awk "NR==2")
             local lost_found_size=$(du -s -B1 "$PWD/test_disk/lost+found" | awk '{print $1}')
             local final_avail=$(df "$PWD/test_disk" --output=avail | awk "NR==2")
@@ -110,11 +114,11 @@ run_test() {
     cleanup "$disk_name"
 }
 
-if [ ! -f "$first_script" ]; then
+if [ ! -f "$arq" ]; then
     exit 1
 fi
 
-chmod +x "$first_script"
+chmod +x "$arq"
 
     #run_test [disk_size] [initial_fill] [fill_limit] [free_upto] [custom_arq_path]
 run_test "$((RANDOM % 300 + 500))" 55 50 5 1
