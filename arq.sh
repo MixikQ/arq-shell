@@ -43,8 +43,8 @@ while true; do
        ;;
      -u|--free-upto)
        free_upto=$2
-       if [ $free_upto -lt 0 -o $free_upto -gt 99 ]; then
-          echo " -u|--free-upto: Free upto must be in interval [0; 100)" >&2
+       if [ $free_upto -lt 1 -o $free_upto -gt 99 ]; then
+          echo " -u|--free-upto: Free upto must be in interval (0; 100)" >&2
           do_exit=true
        fi
        free_upto_default=false
@@ -108,6 +108,11 @@ echo "Fill percentage is $fill_pcent%"
 readarray -t files < <(ls -prts1 --ignore="lost+found" "$dir_path" | grep -v / | awk '{print $1, $2}')
 files=("${files[@]:1}")
 
+if [ $fill_pcent -lt $fill_limit ]; then
+   echo "Fill percentage is under $fill_limit%, there are nothing to archieve"
+   exit 0
+fi
+
 declare -a file_to_arq
 declare -i temp
 free_space_target=$((size*(100-free_upto)/100))
@@ -121,14 +126,14 @@ done
 
 if [ ${#file_to_arq[@]} -gt 0 ]; then
    tar -czvf "${arq_path}/backup_$(date +"%d-%m-%Y-%H%M%S").tar.gz" --files-from <(printf "${dir_path}/%s\n" "${file_to_arq[@]}" >/dev/null) 2>/dev/null
-   echo "Files are archieving to $arq_path"
+   echo " Files are archieving to ${arq_path}:"
+   echo "Files:"
    for file in ${file_to_arq[@]}; do
       rm -f "${dir_path}/${file}"
-      echo "File ${file} added to archieve and removed"
+      echo "${file}"
    done
+   echo "archived and removed from $dir_path"
    echo "Fill percentage after archieving is $(((size-avail_space)*100/size))%"
-else
-   echo "Fill percentage is under $fill_limit%, there are nothing to archieve"
 fi
 
 exit 0

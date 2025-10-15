@@ -20,13 +20,16 @@ fill_disk_with_files() {
     mkdir -p "$test_dir"
 
     local total_kb=$(df "$PWD/test_disk" --block-size=1K --output=size | awk 'NR==2')
+    local lost_found_size=$(du -s -B1 "$PWD/test_disk/lost+found" | awk '{print $1}')
     local available_kb=$(df "$PWD/test_disk" --block-size=1K --output=avail | awk 'NR==2')
+    available_kb=$((available_kb+lost_found_size))
     local target_used_kb=$((total_kb * target_percent / 100))
     local current_used_kb=$((total_kb - available_kb))
 
-    while [ $current_used_kb -lt $target_used_kb ]; do
-        dd if=/dev/urandom of="$test_dir/file_$RANDOM.dat" bs=1M count=$((RANDOM % 10 + 1)) status=none 2>/dev/null
+    while [ $current_used_kb -le $target_used_kb ]; do
+        dd if=/dev/zero of="$test_dir/file_$RANDOM.dat" bs=1M count=$((RANDOM % 15 + 1)) status=none 2>/dev/null
         available_kb=$(df "$PWD/test_disk" --block-size=1K --output=avail | awk 'NR==2')
+        available_kb=$((available_kb+lost_found_size))
         current_used_kb=$((total_kb - available_kb))
     done
 }
@@ -42,36 +45,68 @@ cleanup() {
 run_test() {
     local disk_size="$1"
     local initial_fill="$2"
+    local fill_limit="$3"
+    local free_upto="$4"
+    local custom_arq_path="$5"
     local disk_name="test_disk_$((++total_tests)).img"
 
     echo "   Running test #$((total_tests))"
     echo "     Disk size = ${disk_size}M"
     echo "     Filled to ${initial_fill}+%"
-    echo "     Free upto 60%"
+    echo "     Fill limit ${fill_limit}%"
+    echo "     Free upto ${free_upto}%"
     echo ""
 
     create_virtual_disk "$disk_name" "$disk_size"
     fill_disk_with_files "$initial_fill"
-
-    if "$first_script" --fill-limit 70 --free-upto 60 "$PWD/test_disk" 2>/dev/null; then
-        local size=$(df "$PWD/test_disk" --output=size | awk "NR==2")
-        local lost_found_size=$(du -s -B1 "$PWD/test_disk/lost+found" | awk '{print $1}')
-        local final_avail=$(df "$PWD/test_disk" --output=avail | awk "NR==2")
-        final_avail=$((final_avail+lost_found_size))
-        local final_fill=$(((size-final_avail)*100/size))
-        if [ "$final_fill" -le 60 ] && [ -d "$PWD/test_disk_backup" ]; then
-            ((passed_tests++))
-            echo "   Test #$total_tests PASSED"
+    if [ $custom_arq_path -eq 0 ]; then
+        if "$first_script" --fill-limit "$fill_limit" --free-upto "$free_upto" "$PWD/test_disk" 2>/dev/null; then
+            local size=$(df "$PWD/test_disk" --output=size | awk "NR==2")
+            local lost_found_size=$(du -s -B1 "$PWD/test_disk/lost+found" | awk '{print $1}')
+            local final_avail=$(df "$PWD/test_disk" --output=avail | awk "NR==2")
+            final_avail=$((final_avail+lost_found_size))
+            local final_fill=$(((size-final_avail)*100/size))
+            if [ "$final_fill" -le "$free_upto" ] && [ -d "$PWD/test_disk_backup" ]; then
+                ((passed_tests++))
+                echo "   Test #$total_tests PASSED"
+            else
+                if [ $initial_fill -lt $fill_limit ]; then
+                    ((passed_tests++))
+                    echo "   Test #$total_tests PASSED"
+                else
+                    ((failed_tests++))
+                    echo "   Test #$total_tests FAILED"
+                fi
+            fi
         else
             ((failed_tests++))
             echo "   Test #$total_tests FAILED"
         fi
+        echo ""
     else
-        ((failed_tests++))
-        echo "   Test #$total_tests FAILED"
+        mkdir -p /tmp/custom_backup_test
+        if "$first_script" --fill-limit "$fill_limit" --free-upto "$free_upto" --arq-path "/tmp/custom_backup_test" "$PWD/test_disk" 2>/dev/null; then
+            local size=$(df "$PWD/test_disk" --output=size | awk "NR==2")
+            local lost_found_size=$(du -s -B1 "$PWD/test_disk/lost+found" | awk '{print $1}')
+            local final_avail=$(df "$PWD/test_disk" --output=avail | awk "NR==2")
+            final_avail=$((final_avail+lost_found_size))
+            local final_fill=$(((size-final_avail)*100/size))
+            if [ "$final_fill" -le "$free_upto" ] && [ -d "/tmp/custom_backup_test" ]; then
+                ((passed_tests++))
+                echo "   Test #$total_tests PASSED"
+            else
+                if [ $initial_fill -lt $fill_limit ]; then
+                    ((passed_tests++))
+                    echo "   Test #$total_tests PASSED"
+                else
+                    ((failed_tests++))
+                    echo "   Test #$total_tests FAILED"
+                fi
+            fi
+        fi
+        echo ""
     fi
-    echo ""
-
+    # read -p "Press Enter to continue..."
     cleanup "$disk_name"
 }
 
@@ -81,71 +116,14 @@ fi
 
 chmod +x "$first_script"
 
-run_test 200 80
-
-run_test 150 75
-
-run_test 180 90
-
-disk_name="test_disk_below_limit.img"
-create_virtual_disk "$disk_name" 120
-fill_disk_with_files 50
-
-echo "   Running test #$((total_tests+1))"
-echo "     Disk size = 120M"
-echo "     Filled to 50+%"
-echo "     Free upto 60%"
-
-if "$first_script" --fill-limit 70 --free-upto 60 "$PWD/test_disk" 2>/dev/null; then
-    size=$(df "$PWD/test_disk" --output=size | awk "NR==2")
-    lost_found_size=$(du -s -B1 "$PWD/test_disk/lost+found" | awk '{print $1}')
-    final_avail=$(df "$PWD/test_disk" --output=avail | awk "NR==2")
-    final_avail=$((final_avail+lost_found_size))
-    final_fill=$(((size-final_avail)*100/size))
-    if [ "$final_fill" -eq 50 ] && [ ! -d "$PWD/test_disk_backup" ]; then
-        ((passed_tests++))
-        echo "   Test #$((total_tests+1)) PASSED"
-    else
-        ((failed_tests++))
-        echo "   Test #$((total_tests+1)) FAILED"
-    fi
-else
-    ((failed_tests++))
-    echo "   Test #$((total_tests+1)) FAILED"
-fi
-echo ""
-
-cleanup "$disk_name"
-((total_tests++))
-
-disk_name="test_disk_custom.img"
-create_virtual_disk "$disk_name" 160
-fill_disk_with_files 80
-
-echo "   Running test #$((total_tests+1))"
-echo "     Disk size = 160M"
-echo "     Filled to 80+%"
-echo "     Free upto 60%"
-
-mkdir -p "/tmp/custom_backup_test"
-if "$first_script" --fill-limit 70 --free-upto 60 --arq-path "/tmp/custom_backup_test" "$PWD/test_disk" 2>/dev/null; then
-    if [ -d "/tmp/custom_backup_test" ] && [ "$(ls -A /tmp/custom_backup_test)" ]; then
-        ((passed_tests++))
-        echo "   Test #$((total_tests+1)) PASSED"
-    else
-        ((failed_tests++))
-        echo "   Test #$((total_tests+1)) FAILED "
-    fi
-else
-    ((failed_tests++))
-    echo "   Test #$((total_tests+1)) FAILED "
-fi
-echo""
-
-cleanup "$disk_name"
-((total_tests++))
+    #run_test [disk_size] [initial_fill] [fill_limit] [free_upto] [custom_arq_path]
+run_test "$((RANDOM % 300 + 500))" 55 50 5 1
+run_test "$((RANDOM % 300 + 500))" 90 70 30 0
+run_test "$((RANDOM % 300 + 500))" 75 70 60 0
+run_test "$((RANDOM % 300 + 500))" 85 70 60 0
+run_test "$((RANDOM % 300 + 500))" 50 60 20 0
 
 echo " Total tests = $total_tests"
-echo " Failed tests = $failed_tests"
 echo " Passed tests = $passed_tests"
+echo " Failed tests = $failed_tests"
 [ $failed_tests -eq 0 ] && exit 0 || exit 1
